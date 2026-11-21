@@ -24,6 +24,9 @@ window.__ModuleLoader__.load({
     // booting an older graph (the HTML was served from cache), reloading again
     // would loop every cooldown — so that exact rev is never retried.
     const TRIED_KEY = 'dsh-page-refresh.tried-rev';
+    // The host numbers its reload requests; the page only obeys numbers above
+    // the one it booted with, so a cached tab cannot replay an old request.
+    const EVENTS_PATH = 'page-refresh/events';
     const POLL_MS = 2500;
     // Auto reload is allowed, just not often: at most one per minute, and never
     // twice for the same rev.
@@ -120,6 +123,10 @@ window.__ModuleLoader__.load({
       let candidateRev = null;
       let candidateHits = 0;
       const STABLE_HITS = 3;
+      // Reload command sequence: null until the first state/SSE frame tells us
+      // where this page stands, so booting never looks like a fresh request.
+      let commandSeq = null;
+      let pendingCommand = false;
 
       const set = (patch) => {
         snapshot = { ...snapshot, ...patch };
@@ -178,6 +185,23 @@ window.__ModuleLoader__.load({
         void reload();
       };
 
+      // Obey a reload request from the host (the assistant can send one).
+      const obey = (value) => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return;
+        if (commandSeq === null) {
+          commandSeq = value;
+          return;
+        }
+        if (value <= commandSeq) return;
+        commandSeq = value;
+        if (document.visibilityState === 'hidden') {
+          pendingCommand = true;
+          return;
+        }
+        pendingCommand = false;
+        void reload();
+      };
+
       const poll = async () => {
         let data = null;
         try {
@@ -208,20 +232,56 @@ window.__ModuleLoader__.load({
           candidateHits = 1;
         }
         set({ rev: data.rev, stale, reachable: true, ...(stale ? {} : { stuck: false }) });
+        obey(data.seq);
         if (stale && candidateHits < STABLE_HITS) return;
         maybeAutoReload();
       };
 
       const onVisibility = () => {
-        if (document.visibilityState !== 'visible' || !pending) return;
+        if (document.visibilityState !== 'visible') return;
+        if (pendingCommand) {
+          pendingCommand = false;
+          void reload();
+          return;
+        }
+        if (!pending) return;
         pending = false;
         maybeAutoReload();
+      };
+
+      // Server-sent events give an immediate "reload now" instead of waiting for
+      // the next poll; if the stream is unavailable the poll still catches it.
+      let events = null;
+      const connect = () => {
+        if (typeof window.EventSource !== 'function') return;
+        try {
+          events = new window.EventSource(url(EVENTS_PATH));
+        } catch (error) {
+          warn(error);
+          return;
+        }
+        events.addEventListener('ready', (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (commandSeq === null && typeof data.seq === 'number') commandSeq = data.seq;
+          } catch {
+            /* a malformed frame only means the poll will carry it */
+          }
+        });
+        events.addEventListener('reload', (event) => {
+          try {
+            obey(JSON.parse(event.data).seq);
+          } catch {
+            /* ignore */
+          }
+        });
       };
 
       const start = () => {
         if (started) return () => {};
         started = true;
         document.addEventListener('visibilitychange', onVisibility);
+        connect();
         timer = window.setInterval(() => {
           void poll();
         }, POLL_MS);
@@ -230,6 +290,10 @@ window.__ModuleLoader__.load({
           started = false;
           if (timer !== null) window.clearInterval(timer);
           timer = null;
+          if (events !== null) {
+            events.close();
+            events = null;
+          }
           document.removeEventListener('visibilitychange', onVisibility);
         };
       };
