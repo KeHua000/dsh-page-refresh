@@ -8,6 +8,8 @@
  * mounted. The browser half compares `window.__DSH_BOOT__.rev` with the rev
  * reported here — a difference means "the bundle you booted from is stale".
  */
+import { statSync } from 'node:fs';
+
 export const name = 'dsh-page-refresh';
 
 const STATE_PATH = '/page-refresh/state';
@@ -42,6 +44,17 @@ export function apply(ctx) {
       };
     };
 
+    const changed = (id) => {
+      const baseline = modules.artifactBaseline(id);
+      if (baseline === undefined || typeof baseline.path !== 'string') return true;
+      try {
+        const stat = statSync(baseline.path);
+        return stat.mtimeMs !== baseline.mtimeMs || stat.ctimeMs !== baseline.ctimeMs || stat.size !== baseline.size;
+      } catch {
+        return true;
+      }
+    };
+
     const recompose = () => {
       const rebuilt = [];
       const failed = [];
@@ -49,6 +62,7 @@ export function apply(ctx) {
         const id = entry.id;
         if (typeof id !== 'string') continue;
         if (typeof modules.clientPath(id) !== 'string') continue;
+        if (!changed(id)) continue;
         try {
           const rev = modules.rebuilt(id);
           if (rev !== undefined) rebuilt.push(id);

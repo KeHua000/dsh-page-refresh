@@ -46,6 +46,7 @@ window.__ModuleLoader__.load({
       '.dshpr-btn:hover{background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-label-primary)}',
       '.dshpr-btn:active{transform:scale(.94)}',
       '.dshpr-btn[data-stale="true"]{color:var(--dsw-alias-brand-primary)}',
+      '.dshpr-btn[data-docked="true"]{position:fixed;z-index:30}',
       '.dshpr-dot{position:absolute;top:3px;right:3px;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px var(--dsw-alias-bg-base)}',
       '.dshpr-row{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:16px 0;border-bottom:.5px solid var(--dsw-alias-border-l2);cursor:default}',
       '.dshpr-text{min-width:0}',
@@ -227,15 +228,116 @@ window.__ModuleLoader__.load({
       return activeStore;
     }
 
+    /**
+     * The sidebar's "更多" row is shell chrome, not a slot: its button is drawn
+     * by the sidebar itself, so a plugin cannot register into that line. Keep the
+     * seat in `sidebar.footer.action` for the rail layout, but when the sidebar is
+     * expanded dock the same button onto that row's trailing edge. Only the
+     * anchor's box is read; nothing outside this component is touched.
+     */
+    function moreRowAnchorFor(node) {
+      let scope = node;
+      for (let depth = 0; depth < 12 && scope !== null; depth += 1) {
+        if (typeof scope.querySelectorAll === 'function') {
+          const candidates = scope.querySelectorAll('button[aria-haspopup="menu"]');
+          let best = null;
+          let bestTop = Number.POSITIVE_INFINITY;
+          candidates.forEach((candidate) => {
+            const rect = candidate.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return;
+            if (rect.top < bestTop) {
+              bestTop = rect.top;
+              best = candidate;
+            }
+          });
+          if (best !== null) return best;
+        }
+        if (scope === document.body) break;
+        scope = scope.parentElement;
+      }
+      return null;
+    }
+
+    function useMoreRowDock(ref, enabled) {
+      const [dock, setDock] = React.useState(null);
+      React.useEffect(() => {
+        if (!enabled) {
+          setDock(null);
+          return () => {};
+        }
+        let timer = 0;
+        let applied = null;
+        let published = '';
+        let settled = false;
+        const publish = (next) => {
+          const signature = next === null ? 'none' : next.top + ':' + next.left;
+          if (signature === published) return;
+          published = signature;
+          settled = false;
+          setDock(next);
+        };
+        const tick = () => {
+          const node = ref.current;
+          const anchor = node === null ? null : moreRowAnchorFor(node);
+          if (node === null || anchor === null) {
+            applied = null;
+            publish(null);
+            timer = window.setTimeout(tick, 250);
+            return;
+          }
+          const target = anchor.getBoundingClientRect();
+          const desiredTop = target.top + (target.height - 32) / 2;
+          const desiredLeft = target.right - 32 - 12;
+          let nextTop = desiredTop;
+          let nextLeft = desiredLeft;
+          if (applied !== null && settled) {
+            // A transformed ancestor reinterprets `position: fixed` coordinates, so
+            // correct by the measured offset error until the button sits on target.
+            const current = node.getBoundingClientRect();
+            const errorTop = desiredTop - current.top;
+            const errorLeft = desiredLeft - current.left;
+            if (Math.abs(errorTop) > 1.5 || Math.abs(errorLeft) > 1.5) {
+              nextTop = applied.top + errorTop;
+              nextLeft = applied.left + errorLeft;
+            } else {
+              nextTop = applied.top;
+              nextLeft = applied.left;
+            }
+          }
+          applied = { top: Math.round(nextTop), left: Math.round(nextLeft) };
+          publish(applied);
+          if (!settled) settled = true;
+          timer = window.setTimeout(tick, 250);
+        };
+        tick();
+        return () => {
+          window.clearTimeout(timer);
+        };
+      }, [enabled]);
+      return dock;
+    }
+
     function SidebarButton(props) {
       const store = storeOf(props);
       const state = useStore(store);
       const t = translatorOf(props);
+      const ref = React.useRef(null);
+      const wide = props !== null && typeof props === 'object' && props.wide === true;
+      const dock = useMoreRowDock(ref, wide);
+      const style = dock === null ? undefined : {
+        position: 'fixed',
+        top: dock.top + 'px',
+        left: dock.left + 'px',
+        zIndex: 30,
+      };
       return h(
         'button',
         {
+          ref,
           type: 'button',
           className: 'dshpr-btn',
+          style,
+          'data-docked': dock === null ? undefined : 'true',
           'aria-label': t('refreshPage'),
           title: state.stale ? t('refreshStale') : t('refreshHint'),
           'data-stale': state.stale ? 'true' : undefined,
