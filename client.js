@@ -20,8 +20,14 @@ window.__ModuleLoader__.load({
     const NS = 'page-refresh';
     const AUTO_KEY = 'dsh-page-refresh.auto';
     const LAST_AUTO_KEY = 'dsh-page-refresh.last-auto';
+    // Which rev the last reload was made FOR. If the page comes back still
+    // booting an older graph (the HTML was served from cache), reloading again
+    // would loop every cooldown — so that exact rev is never retried.
+    const TRIED_KEY = 'dsh-page-refresh.tried-rev';
     const POLL_MS = 2500;
-    const AUTO_COOLDOWN_MS = 15000;
+    // Auto reload is allowed, just not often: at most one per minute, and never
+    // twice for the same rev.
+    const AUTO_COOLDOWN_MS = 60000;
 
     const boot = typeof window.__DSH_BOOT__ === 'object' && window.__DSH_BOOT__ !== null ? window.__DSH_BOOT__ : null;
     const bootRev = boot !== null && typeof boot.rev === 'string' ? boot.rev : null;
@@ -30,6 +36,7 @@ window.__ModuleLoader__.load({
       refreshPage: '刷新页面',
       refreshHint: '重新合成插件产物后刷新页面',
       refreshStale: '插件产物已更新，点击刷新',
+      refreshCached: '页面还是旧的（可能被缓存了）：请手动强制刷新一次',
       autoTitle: '自动刷新页面',
       autoDescription: '插件的客户端代码变化后自动重新加载页面；关闭后仍可用侧栏按钮手动刷新。',
     };
@@ -37,6 +44,7 @@ window.__ModuleLoader__.load({
       refreshPage: 'Refresh page',
       refreshHint: 'Recompose plugin bundles, then reload the page',
       refreshStale: 'A plugin bundle changed — click to refresh',
+      refreshCached: 'The page is still booting the old graph (cached) — force a reload once',
       autoTitle: 'Auto refresh page',
       autoDescription: 'Reload the page after a plugin’s client code changes. Turn it off to refresh manually from the sidebar button.',
     };
@@ -102,11 +110,16 @@ window.__ModuleLoader__.load({
 
     function createStore() {
       const listeners = new Set();
-      let snapshot = { rev: bootRev, stale: false, auto: readAuto(), busy: false, reachable: true };
+      let snapshot = { rev: bootRev, stale: false, auto: readAuto(), busy: false, reachable: true, stuck: false };
       let started = false;
       let timer = null;
       let pending = false;
       let warned = false;
+      // A rev must hold still for a couple of polls before it is acted on, so a
+      // burst of edits cannot turn into a burst of reloads.
+      let candidateRev = null;
+      let candidateHits = 0;
+      const STABLE_HITS = 3;
 
       const set = (patch) => {
         snapshot = { ...snapshot, ...patch };
@@ -135,12 +148,23 @@ window.__ModuleLoader__.load({
         }
         try {
           window.sessionStorage.setItem(LAST_AUTO_KEY, String(Date.now()));
+          if (typeof snapshot.rev === 'string') window.sessionStorage.setItem(TRIED_KEY, snapshot.rev);
         } catch {}
         window.location.reload();
       };
 
       const maybeAutoReload = () => {
         if (!snapshot.auto || snapshot.busy || !snapshot.stale) return;
+        // Already reloaded for this very rev and the fresh page still boots an
+        // older graph: stop instead of reloading every cooldown.
+        let tried = null;
+        try {
+          tried = window.sessionStorage.getItem(TRIED_KEY);
+        } catch {}
+        if (tried !== null && tried === snapshot.rev && bootRev !== snapshot.rev) {
+          if (!snapshot.stuck) set({ stuck: true });
+          return;
+        }
         if (document.visibilityState === 'hidden') {
           pending = true;
           return;
@@ -171,7 +195,20 @@ window.__ModuleLoader__.load({
           return;
         }
         const stale = bootRev !== null && data.rev !== bootRev;
-        set({ rev: data.rev, stale, reachable: true });
+        if (!stale) {
+          candidateRev = null;
+          candidateHits = 0;
+          try {
+            window.sessionStorage.removeItem(TRIED_KEY);
+          } catch {}
+        } else if (data.rev === candidateRev) {
+          candidateHits += 1;
+        } else {
+          candidateRev = data.rev;
+          candidateHits = 1;
+        }
+        set({ rev: data.rev, stale, reachable: true, ...(stale ? {} : { stuck: false }) });
+        if (stale && candidateHits < STABLE_HITS) return;
         maybeAutoReload();
       };
 
@@ -339,7 +376,7 @@ window.__ModuleLoader__.load({
           style,
           'data-docked': dock === null ? undefined : 'true',
           'aria-label': t('refreshPage'),
-          title: state.stale ? t('refreshStale') : t('refreshHint'),
+          title: state.stuck ? t('refreshCached') : state.stale ? t('refreshStale') : t('refreshHint'),
           'data-stale': state.stale ? 'true' : undefined,
           disabled: state.busy,
           onClick: () => {

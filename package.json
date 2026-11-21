@@ -1,6 +1,6 @@
 {
   "name": "dsh-page-refresh",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "客户端插件产物变化后自动重新合成并刷新页面,侧栏提供手动刷新按钮与自动刷新开关。",
