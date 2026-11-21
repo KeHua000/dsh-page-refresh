@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Page refresh",
+    "description": "Reloads the page after a plugin's client bundle changes; adds a sidebar refresh button, and auto refresh can be switched off in settings."
+  }
+}

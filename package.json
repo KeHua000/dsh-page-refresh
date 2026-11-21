@@ -1,0 +1,52 @@
+{
+  "name": "dsh-page-refresh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "客户端插件产物变化后自动重新合成并刷新页面,侧栏提供手动刷新按钮与自动刷新开关。",
+  "license": "MIT",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "reload",
+    "refresh",
+    "auto-refresh",
+    "hot-reload"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/zh.json",
+    "locale/en.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KeHua000/dsh-page-refresh.git"
+  },
+  "homepage": "https://github.com/KeHua000/dsh-page-refresh#readme",
+  "bugs": {
+    "url": "https://github.com/KeHua000/dsh-page-refresh/issues"
+  }
+}
